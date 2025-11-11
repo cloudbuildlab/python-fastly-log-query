@@ -1,0 +1,62 @@
+# Log Sources Configuration
+# Define all log sources that can be synced
+#
+# Copy this file to log_sources.yaml and configure with your actual values
+# log_sources.yaml is gitignored and will not be committed
+
+log_sources:
+  example-source-1:
+    type: s3
+    enabled: true
+    description: "Example log source 1"
+    s3_bucket: "s3://your-bucket-name/path/to/logs"
+    local_dir: "logs/example-source-1/raw"
+    parsed_dir: "logs/example-source-1/parsed"
+    credentials:
+      # Use AWS credentials from environment/aws-vault
+      # Optional: specify AWS profile name
+      profile: null # Set to "prod" if using aws-vault or named profiles
+  example-source-2:
+    type: s3
+    enabled: true
+    description: "Example log source 2"
+    s3_bucket: "s3://your-bucket-name/path/to/other-logs"
+    local_dir: "logs/example-source-2/raw"
+    parsed_dir: "logs/example-source-2/parsed"
+    credentials:
+      # Use AWS credentials from environment/aws-vault
+      # Optional: specify AWS profile name
+      profile: null # Set to "prod" if using aws-vault or named profiles
+  example-source-3:
+    type: s3
+    enabled: false
+    description: "Example disabled source"
+    s3_bucket: "s3://your-bucket-name/path/to/disabled-logs"
+    local_dir: "logs/example-source-3/raw"
+    parsed_dir: "logs/example-source-3/parsed"
+    credentials:
+      # Use AWS credentials from environment/aws-vault
+      # Optional: specify AWS profile name
+      profile: null # Set to "prod" if using aws-vault or named profiles
+
+
+  # Example: Add more sources as needed
+  # staging-logs:
+  #   type: s3
+  #   enabled: false
+  #   description: "Staging environment logs"
+  #   s3_bucket: "s3://staging-bucket/logs/"
+  #   local_dir: "logs/staging/raw"
+  #   parsed_dir: "logs/staging/parsed"
+  #   credentials:
+  #     profile: "staging"
+
+  # production-logs:
+  #   type: s3
+  #   enabled: false
+  #   description: "Production environment logs"
+  #   s3_bucket: "s3://prod-bucket/logs/"
+  #   local_dir: "logs/production/raw"
+  #   parsed_dir: "logs/production/parsed"
+  #   credentials:
+  #     profile: "production"
