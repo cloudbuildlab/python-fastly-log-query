@@ -26,8 +26,11 @@ A comprehensive tool for syncing Fastly logs from S3, parsing them, and generati
 - **UTC timezone handling**: All date operations use UTC to match log file organization
 - **Log parsing**: Converts syslog-style Fastly logs to structured JSON/CSV
 - **Comprehensive analytics**: Traffic patterns, error analysis, performance metrics, user agent analysis, query parameter patterns, endpoint drill-down, daily summaries, and slowness investigation
+- **Time-based filtering**: Filter logs to analyze only the last N hours (e.g., last hour, last 24 hours)
+- **Client IP analysis**: Top client IPs by request volume for security and traffic analysis
 - **Interactive dashboard**: Streamlit-based web dashboard for visualizing log analytics
 - **Modular design**: Run sync, parse, or analyze operations independently or as a pipeline
+- **Log management**: Utility script to clear all log files when needed
 
 ## Prerequisites
 
@@ -77,6 +80,35 @@ python3 scripts/query_logs.py --start-date 2025-11-10 --end-date 2025-11-12
 **Note**: The `--date` parameter syncs logs from the specified date **to today** (in UTC, since logs are stored in UTC). To sync a specific date range, use `--start-date` and `--end-date`.
 
 **Timezone Note**: All date operations use UTC to match the log file organization in S3. Log timestamps are preserved in UTC throughout parsing and analysis.
+
+### Time-Based Filtering
+
+Filter logs to analyze only entries from the last N hours:
+
+**Analyze last hour from existing parsed logs** (no sync needed):
+
+```bash
+python3 scripts/query_logs.py --last-hours 1.0
+```
+
+**Sync, parse, and analyze with time filter**:
+
+```bash
+python3 scripts/query_logs.py --date 2025-11-23 --last-hours 1.0
+```
+
+**Other time filter examples**:
+
+```bash
+python3 scripts/query_logs.py --last-hours 0.5   # Last 30 minutes
+python3 scripts/query_logs.py --last-hours 24.0  # Last 24 hours
+python3 scripts/query_logs.py --last-hours 2.5   # Last 2.5 hours
+```
+
+**Note**: When using `--last-hours` without dates:
+
+- If parsed logs exist, it will analyze them with the time filter
+- If no parsed logs exist, it will automatically sync today's logs, parse them, then analyze with the time filter
 
 ### Individual Operations
 
@@ -137,7 +169,14 @@ The dashboard will open in your browser (typically at `http://localhost:8501`) a
 - **Performance Metrics**: Cache hit/miss rates, response size statistics
 - **User Agent Analysis**: Top user agents and agent type distribution
 - **Query Patterns**: Most common query parameters and value distributions
-- **Slowness Investigation**: Cache miss patterns, large response endpoints, peak traffic times
+- **Slowness Investigation**: Cache miss patterns, large response endpoints, peak traffic times, **top client IPs by request volume**
+
+**New in Slowness Investigation**: Top client IPs analysis helps identify:
+
+- Bots and crawlers generating high traffic
+- Potential abuse or DDoS patterns
+- Most active clients
+- Security investigation
 
 You can specify a custom parsed log file path in the dashboard sidebar.
 
@@ -151,6 +190,7 @@ You can specify a custom parsed log file path in the dashboard sidebar.
 - `--operation OP`: Operation to perform: `sync`, `parse`, `analyze`, or `all` (default: `all`)
 - `--parsed-output FILE`: Output file for parsed logs (default: first enabled source's parsed output)
 - `--analytics-output FILE`: Output file for analytics report (optional)
+- `--last-hours HOURS`: Filter to only entries from the last N hours (e.g., `1.0` for last hour). Only applies to analyze operation. If no parsed logs exist, automatically syncs today's logs first.
 
 ### sync_logs.sh
 
@@ -171,6 +211,22 @@ You can specify a custom parsed log file path in the dashboard sidebar.
 - `--input FILE`: Input file (parsed JSON or CSV) - **required**
 - `--output FILE`: Output file path (optional)
 - `--format FORMAT`: Output format: `json` or `console` (default: `console`)
+- `--last-hours HOURS`: Filter to only entries from the last N hours (e.g., `1.0` for last hour)
+
+### clear_logs.py
+
+Utility script to clear all log files (raw and parsed):
+
+- `--logs-dir DIR`: Path to logs directory (default: `./logs`)
+- `--yes, -y`: Skip confirmation prompt
+
+**Examples**:
+
+```bash
+python3 scripts/clear_logs.py              # Clear with confirmation
+python3 scripts/clear_logs.py --yes        # Clear without confirmation
+python3 scripts/clear_logs.py -y           # Short form
+```
 
 ## Log Format
 
@@ -222,7 +278,7 @@ The analytics report includes:
 - **Performance Metrics**: Cache hit/miss rates, response size statistics, hourly cache performance, hourly response size trends
 - **User Agent Analysis**: Top user agents, agent type distribution
 - **Query Patterns**: Most common query parameters, parameter value distributions, top query signatures
-- **Slowness Investigation**: Traffic spikes, cache miss patterns, large response endpoints, peak traffic times, rate of change analysis
+- **Slowness Investigation**: Traffic spikes, cache miss patterns, large response endpoints, peak traffic times, rate of change analysis, **top client IPs by request volume**
 - **Endpoint Drill-Down**: Detailed analysis for specific endpoints (time patterns, errors, cache, query params)
 - **Daily Summaries**: Daily request totals with status code breakdown by day
 
@@ -243,7 +299,8 @@ fastly_log_query/
 │   ├── query_logs.py        # Main orchestration script
 │   ├── sync_logs.py         # S3 sync script
 │   ├── parse_logs.py        # Log parser
-│   └── analyze_logs.py      # Analytics engine
+│   ├── analyze_logs.py      # Analytics engine
+│   └── clear_logs.py         # Utility to clear all log files
 ├── src/                     # Source code modules
 │   ├── sync/                # Sync implementations
 │   ├── parse/               # Parsing logic
@@ -346,6 +403,29 @@ streamlit run dashboard/dashboard.py
 ```
 
 The dashboard will automatically load the parsed logs and display interactive visualizations. You can change the log file path in the sidebar if needed.
+
+### Example 5: Analyze last hour of logs
+
+```bash
+# Analyze last hour from existing parsed logs (no sync needed)
+python3 scripts/query_logs.py --last-hours 1.0
+
+# Or sync today's logs and analyze last hour
+python3 scripts/query_logs.py --date 2025-11-23 --last-hours 1.0
+
+# Analyze last 30 minutes
+python3 scripts/query_logs.py --last-hours 0.5
+```
+
+### Example 6: Clear all logs
+
+```bash
+# Clear all log files with confirmation
+python3 scripts/clear_logs.py
+
+# Clear without confirmation
+python3 scripts/clear_logs.py --yes
+```
 
 ## License
 

@@ -10,7 +10,7 @@ import argparse
 import sys
 from pathlib import Path
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
@@ -31,6 +31,57 @@ def load_data(input_path: Path) -> List[Dict]:
         return df.to_dict('records')
     else:
         raise ValueError(f"Unsupported file format: {input_path.suffix}")
+
+
+def filter_by_time(entries: List[Dict], last_hours: float) -> List[Dict]:
+    """
+    Filter entries to only include those from the last N hours.
+    
+    Args:
+        entries: List of log entries
+        last_hours: Number of hours to look back (e.g., 1.0 for last hour)
+    
+    Returns:
+        Filtered list of entries
+    """
+    if not entries or last_hours is None:
+        return entries
+    
+    # Get current time in UTC
+    now = datetime.now(timezone.utc)
+    cutoff_time = now - timedelta(hours=last_hours)
+    
+    filtered = []
+    for entry in entries:
+        timestamp_str = entry.get('timestamp')
+        if not timestamp_str:
+            continue
+        
+        try:
+            # Parse timestamp (handle both ISO format and other formats)
+            if isinstance(timestamp_str, str):
+                # Try ISO format first
+                try:
+                    entry_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                except ValueError:
+                    # Try other common formats
+                    try:
+                        entry_time = datetime.strptime(timestamp_str, '%Y-%m-%dT%H:%M:%S')
+                        # Assume UTC if no timezone info
+                        entry_time = entry_time.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        continue
+            else:
+                continue
+            
+            # Filter entries within the time window
+            if entry_time >= cutoff_time:
+                filtered.append(entry)
+        except (ValueError, TypeError, AttributeError):
+            # Skip entries with invalid timestamps
+            continue
+    
+    return filtered
 
 
 def analyze_traffic_patterns(entries: List[Dict]) -> Dict:
@@ -589,6 +640,11 @@ def main():
         default='console',
         help='Output format (default: console)'
     )
+    parser.add_argument(
+        '--last-hours',
+        type=float,
+        help='Filter to only entries from the last N hours (e.g., 1.0 for last hour)'
+    )
     
     args = parser.parse_args()
     
@@ -600,6 +656,12 @@ def main():
     print(f"Loading data from {input_path}...")
     entries = load_data(input_path)
     print(f"Loaded {len(entries):,} log entries")
+    
+    # Apply time filter if specified
+    if args.last_hours:
+        print(f"Filtering to last {args.last_hours} hour(s)...")
+        entries = filter_by_time(entries, args.last_hours)
+        print(f"Filtered to {len(entries):,} log entries")
     
     print("Generating analytics...")
     analytics = {

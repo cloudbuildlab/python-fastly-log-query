@@ -524,6 +524,33 @@ def main():
             if fig:
                 st.plotly_chart(fig, width='stretch')
 
+        # Top client IPs
+        if analytics['slowness'].get('top_request_ips'):
+            st.subheader("Top Client IPs by Request Volume")
+            st.markdown("**Identifying clients generating the most traffic can help detect bots, crawlers, or potential abuse.**")
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                top_ips = analytics['slowness']['top_request_ips']
+                fig = create_bar_chart(
+                    top_ips,
+                    "Top Client IPs",
+                    "IP Address",
+                    "Request Count",
+                    limit=15
+                )
+                if fig:
+                    st.plotly_chart(fig, width='stretch')
+            
+            with col2:
+                # Table with top IPs
+                df_ips = pd.DataFrame({
+                    'IP Address': list(top_ips.keys())[:20],
+                    'Requests': list(top_ips.values())[:20]
+                })
+                st.dataframe(df_ips, width='stretch', hide_index=True)
+
 
 if __name__ == "__main__":
     main()
