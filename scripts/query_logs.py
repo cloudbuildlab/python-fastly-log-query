@@ -122,7 +122,7 @@ def run_parse():
     return parsed_outputs[0] if parsed_outputs else None
 
 
-def run_analyze(parsed_output: str, analytics_output: str = None):
+def run_analyze(parsed_output: str, analytics_output: str = None, last_hours: float = None):
     """Run analyze operation."""
     script_dir = Path(__file__).parent
     analyze_script = script_dir / "analyze_logs.py"
@@ -143,6 +143,9 @@ def run_analyze(parsed_output: str, analytics_output: str = None):
 
     if analytics_output:
         args.extend(["--output", analytics_output])
+    
+    if last_hours:
+        args.extend(["--last-hours", str(last_hours)])
 
     try:
         subprocess.run(args, check=True)
@@ -184,21 +187,65 @@ Examples:
         type=str,
         help="Output file for analytics report (optional)"
     )
+    parser.add_argument(
+        "--last-hours",
+        type=float,
+        help="Filter to only entries from the last N hours (e.g., 1.0 for last hour). Only applies to analyze operation."
+    )
 
     args = parser.parse_args()
 
-    # Parse date range
-    try:
-        start_date, end_date = parse_date_range(
-            args.start_date, args.end_date, args.date
-        )
-    except ValueError as e:
-        print(f"{Colors.RED}Error: {e}{Colors.NC}", file=sys.stderr)
-        parser.print_help()
-        sys.exit(1)
+    # Parse date range (only if dates are provided)
+    start_date = None
+    end_date = None
+    has_dates = bool(args.start_date or args.end_date or args.date)
+    if has_dates:
+        try:
+            start_date, end_date = parse_date_range(
+                args.start_date, args.end_date, args.date
+            )
+        except ValueError as e:
+            print(f"{Colors.RED}Error: {e}{Colors.NC}", file=sys.stderr)
+            parser.print_help()
+            sys.exit(1)
 
-    if args.date:
-        print(f"{Colors.YELLOW}Note: --date specified, syncing from {start_date} to {end_date} (today UTC){Colors.NC}")
+        if args.date:
+            print(f"{Colors.YELLOW}Note: --date specified, syncing from {start_date} to {end_date} (today UTC){Colors.NC}")
+
+    # If --last-hours is specified without dates and without explicit operation:
+    # - Check if parsed logs exist
+    # - If not, automatically sync today's logs and parse them, then analyze
+    # - If yes, just analyze
+    if args.last_hours and not has_dates and args.operation == "all":
+        # Check if parsed logs exist
+        try:
+            sources = load_config()
+            enabled = get_enabled_sources(sources)
+            if enabled:
+                first_source = next(iter(enabled))
+                first_config = enabled[first_source]
+                parsed_dir = first_config.get('parsed_dir', f"logs/{first_source}/parsed")
+                parsed_output_path = Path(f"{parsed_dir}/parsed_logs.json")
+                
+                if parsed_output_path.exists():
+                    # Parsed logs exist, just analyze
+                    args.operation = "analyze"
+                else:
+                    # No parsed logs, sync today's logs and parse, then analyze
+                    print(f"{Colors.YELLOW}No parsed logs found. Syncing today's logs...{Colors.NC}")
+                    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    try:
+                        start_date, end_date = parse_date_range(today, today, None)
+                        has_dates = True
+                        args.operation = "all"
+                    except ValueError as e:
+                        print(f"{Colors.RED}Error setting date: {e}{Colors.NC}", file=sys.stderr)
+                        args.operation = "analyze"
+            else:
+                args.operation = "analyze"
+        except Exception:
+            # If we can't determine, default to analyze
+            args.operation = "analyze"
 
     # Validate date parameters for sync operation
     if args.operation in ["sync", "all"]:
@@ -245,7 +292,7 @@ Examples:
                 print(f"{Colors.RED}Error: Failed to determine parsed output: {e}{Colors.NC}", file=sys.stderr)
                 sys.exit(1)
 
-        if not run_analyze(parsed_output, args.analytics_output):
+        if not run_analyze(parsed_output, args.analytics_output, args.last_hours):
             sys.exit(1)
 
     print(f"{Colors.GREEN}All operations completed successfully!{Colors.NC}")

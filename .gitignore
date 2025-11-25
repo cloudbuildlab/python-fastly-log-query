@@ -26,7 +26,6 @@ config/log_sources.yaml
 # logs/analytics.json
 
 # IDE
-.vscode/
 .idea/
 *.swp
 *.swo
@@ -39,4 +38,3 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
-
