@@ -202,26 +202,45 @@ class S3Sync(BaseSync):
         print(f"{Colors.BLUE}Local Directory: {self.local_dir}{Colors.NC}")
         print(f"{Colors.GREEN}{'='*60}{Colors.NC}\n")
 
-        # Validate dates
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        # Parse dates - support both date and datetime formats
+        from src.utils.date_utils import parse_datetime
+        
+        start_dt = parse_datetime(start_date)
+        end_dt = parse_datetime(end_date)
+        
+        # Check if hour-level precision is used
+        has_hour_precision = 'T' in start_date or 'T' in end_date
 
-        # Generate date range
-        current_date = start_dt
+        # Generate date/hour range
+        current_dt = start_dt
         total_downloads = 0
         total_skips = 0
         total_errors = 0
 
-        while current_date <= end_dt:
-            date_str = current_date.strftime("%Y-%m-%d")
-            downloads, skips, errors = self._sync_date(date_str, max_workers)
+        if has_hour_precision:
+            # Iterate hour by hour
+            while current_dt <= end_dt:
+                date_str = current_dt.strftime("%Y-%m-%dT%H")
+                downloads, skips, errors = self._sync_date(date_str, max_workers)
 
-            total_downloads += downloads
-            total_skips += skips
-            total_errors += errors
+                total_downloads += downloads
+                total_skips += skips
+                total_errors += errors
 
-            # Move to next date
-            current_date += timedelta(days=1)
+                # Move to next hour
+                current_dt += timedelta(hours=1)
+        else:
+            # Iterate day by day (original behavior)
+            while current_dt <= end_dt:
+                date_str = current_dt.strftime("%Y-%m-%d")
+                downloads, skips, errors = self._sync_date(date_str, max_workers)
+
+                total_downloads += downloads
+                total_skips += skips
+                total_errors += errors
+
+                # Move to next date
+                current_dt += timedelta(days=1)
 
         print(f"\n{Colors.GREEN}Source '{self.source_name}' sync completed!{Colors.NC}")
         print(f"  New files downloaded: {total_downloads}")

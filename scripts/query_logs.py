@@ -167,9 +167,9 @@ Examples:
   %(prog)s --operation analyze --parsed-output ./logs/srv_quakesearch-fastly/parsed/parsed_logs.json
         """
     )
-    parser.add_argument("--start-date", type=str, help="Start date in YYYY-MM-DD format")
-    parser.add_argument("--end-date", type=str, help="End date in YYYY-MM-DD format")
-    parser.add_argument("--date", type=str, help="Start date in YYYY-MM-DD format (syncs from this date to today)")
+    parser.add_argument("--start-date", type=str, help="Start date in YYYY-MM-DD or YYYY-MM-DDTHH format (e.g., 2025-11-25 or 2025-11-25T00)")
+    parser.add_argument("--end-date", type=str, help="End date in YYYY-MM-DD or YYYY-MM-DDTHH format (e.g., 2025-11-25 or 2025-11-25T23)")
+    parser.add_argument("--date", type=str, help="Start date in YYYY-MM-DD or YYYY-MM-DDTHH format (syncs from this date to today)")
     parser.add_argument(
         "--operation",
         choices=["sync", "parse", "analyze", "all"],

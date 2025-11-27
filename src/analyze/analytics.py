@@ -536,6 +536,94 @@ def analyze_slowness_patterns(entries: List[Dict]) -> Dict:
             # Top IPs by request volume (might indicate bots/crawlers causing load)
             top_ips = df_with_ip['ip_address'].value_counts().head(20).to_dict()
             results['top_request_ips'] = {k: int(v) for k, v in top_ips.items()}
+            
+            # Get user agent info for top IPs
+            if 'user_agent' in df_with_ip.columns:
+                top_ips_with_ua = {}
+                for ip in list(top_ips.keys())[:10]:  # Top 10 IPs
+                    ip_df = df_with_ip[df_with_ip['ip_address'] == ip]
+                    if 'user_agent' in ip_df.columns:
+                        # Get most common user agent for this IP
+                        ua_counts = ip_df['user_agent'].dropna().value_counts()
+                        if len(ua_counts) > 0:
+                            top_ua = ua_counts.index[0]
+                            top_ua_count = int(ua_counts.iloc[0])
+                            total_for_ip = len(ip_df)
+                            ua_percentage = (top_ua_count / total_for_ip * 100) if total_for_ip > 0 else 0
+                            
+                            # If multiple user agents, show count
+                            unique_ua_count = len(ua_counts)
+                            if unique_ua_count > 1:
+                                top_ua_display = f"{top_ua} ({unique_ua_count} unique UAs)"
+                            else:
+                                top_ua_display = top_ua
+                            
+                            top_ips_with_ua[ip] = {
+                                'request_count': int(top_ips[ip]),
+                                'top_user_agent': top_ua_display,
+                                'top_ua_count': top_ua_count,
+                                'top_ua_percentage': float(ua_percentage),
+                                'unique_ua_count': int(unique_ua_count)
+                            }
+                        else:
+                            top_ips_with_ua[ip] = {
+                                'request_count': int(top_ips[ip]),
+                                'top_user_agent': 'Unknown',
+                                'top_ua_count': 0,
+                                'top_ua_percentage': 0.0,
+                                'unique_ua_count': 0
+                            }
+                    else:
+                        top_ips_with_ua[ip] = {
+                            'request_count': int(top_ips[ip]),
+                            'top_user_agent': 'N/A',
+                            'top_ua_count': 0,
+                            'top_ua_percentage': 0.0,
+                            'unique_ua_count': 0
+                        }
+                results['top_request_ips_with_ua'] = top_ips_with_ua
+            
+            # Requests per minute by IP (rate-based analysis)
+            if 'timestamp' in df_with_ip.columns:
+                df_with_ip['timestamp'] = pd.to_datetime(df_with_ip['timestamp'], errors='coerce')
+                df_with_ip = df_with_ip[df_with_ip['timestamp'].notna()]
+                if len(df_with_ip) > 0:
+                    ip_rates = {}
+                    for ip in df_with_ip['ip_address'].unique():
+                        ip_df = df_with_ip[df_with_ip['ip_address'] == ip]
+                        if len(ip_df) > 1:
+                            # Calculate time span
+                            min_time = ip_df['timestamp'].min()
+                            max_time = ip_df['timestamp'].max()
+                            time_span = (max_time - min_time).total_seconds() / 60.0  # Convert to minutes
+                            
+                            # Calculate requests per minute
+                            if time_span > 0:
+                                requests_per_min = len(ip_df) / time_span
+                            else:
+                                # If all requests are at the same time, use 1 minute as minimum
+                                requests_per_min = len(ip_df) / 1.0
+                            
+                            ip_rates[ip] = {
+                                'requests_per_minute': float(requests_per_min),
+                                'total_requests': int(len(ip_df)),
+                                'time_span_minutes': float(time_span) if time_span > 0 else 1.0
+                            }
+                        else:
+                            # Single request - assume 1 minute span
+                            ip_rates[ip] = {
+                                'requests_per_minute': float(len(ip_df)),
+                                'total_requests': int(len(ip_df)),
+                                'time_span_minutes': 1.0
+                            }
+                    
+                    # Sort by requests per minute and get top 10
+                    top_ips_by_rate = dict(sorted(
+                        ip_rates.items(),
+                        key=lambda x: x[1]['requests_per_minute'],
+                        reverse=True
+                    )[:10])
+                    results['top_ips_by_request_rate'] = top_ips_by_rate
 
     # 7. User agent patterns (certain clients might be slower)
     if 'user_agent' in df.columns and 'response_size' in df.columns:

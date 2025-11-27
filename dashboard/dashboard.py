@@ -524,32 +524,82 @@ def main():
             if fig:
                 st.plotly_chart(fig, width='stretch')
 
-        # Top client IPs
+        # Top 10 Client IPs
         if analytics['slowness'].get('top_request_ips'):
-            st.subheader("Top Client IPs by Request Volume")
+            st.subheader("Top 10 Client IPs by Request Volume")
             st.markdown("**Identifying clients generating the most traffic can help detect bots, crawlers, or potential abuse.**")
-            
+
+            top_ips = analytics['slowness']['top_request_ips']
+            # Get top 10
+            top_10_ips = dict(sorted(top_ips.items(), key=lambda x: x[1], reverse=True)[:10])
+
             col1, col2 = st.columns([2, 1])
-            
+
             with col1:
-                top_ips = analytics['slowness']['top_request_ips']
                 fig = create_bar_chart(
-                    top_ips,
-                    "Top Client IPs",
+                    top_10_ips,
+                    "Top 10 Client IPs",
                     "IP Address",
                     "Request Count",
-                    limit=15
+                    limit=10
                 )
                 if fig:
                     st.plotly_chart(fig, width='stretch')
-            
+
             with col2:
-                # Table with top IPs
-                df_ips = pd.DataFrame({
-                    'IP Address': list(top_ips.keys())[:20],
-                    'Requests': list(top_ips.values())[:20]
-                })
+                # Table with top 10 IPs - include user agent if available
+                if analytics['slowness'].get('top_request_ips_with_ua'):
+                    ip_ua_data = analytics['slowness']['top_request_ips_with_ua']
+                    df_ips = pd.DataFrame([
+                        {
+                            'IP Address': ip,
+                            'Requests': data['request_count'],
+                            'Top User Agent': data['top_user_agent'][:80] if len(data['top_user_agent']) > 80 else data['top_user_agent']  # Truncate long UAs
+                        }
+                        for ip, data in ip_ua_data.items()
+                    ])
+                else:
+                    # Fallback if user agent data not available
+                    df_ips = pd.DataFrame({
+                        'IP Address': list(top_10_ips.keys()),
+                        'Requests': list(top_10_ips.values())
+                    })
                 st.dataframe(df_ips, width='stretch', hide_index=True)
+
+        # Top 10 IPs by Request Rate (requests per minute)
+        if analytics['slowness'].get('top_ips_by_request_rate'):
+            st.subheader("Top 10 Client IPs by Request Rate (Requests per Minute)")
+            st.markdown("**IPs with high request rates may indicate automated traffic, bots, or potential abuse.**")
+
+            ip_rates = analytics['slowness']['top_ips_by_request_rate']
+
+            col1, col2 = st.columns([2, 1])
+
+            with col1:
+                # Create chart with requests per minute
+                rate_data = {ip: data['requests_per_minute'] for ip, data in ip_rates.items()}
+                fig = create_bar_chart(
+                    rate_data,
+                    "Top 10 IPs by Request Rate",
+                    "IP Address",
+                    "Requests per Minute",
+                    limit=10
+                )
+                if fig:
+                    st.plotly_chart(fig, width='stretch')
+
+            with col2:
+                # Table with detailed metrics
+                df_rates = pd.DataFrame([
+                    {
+                        'IP Address': ip,
+                        'Req/min': f"{data['requests_per_minute']:.2f}",
+                        'Total Requests': int(data['total_requests']),
+                        'Time Span (min)': f"{data['time_span_minutes']:.1f}"
+                    }
+                    for ip, data in ip_rates.items()
+                ])
+                st.dataframe(df_rates, width='stretch', hide_index=True)
 
 
 if __name__ == "__main__":

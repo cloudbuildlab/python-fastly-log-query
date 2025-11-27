@@ -8,6 +8,7 @@ import json
 import csv
 import argparse
 import sys
+import random
 from pathlib import Path
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -16,21 +17,149 @@ import pandas as pd
 import numpy as np
 
 
-def load_data(input_path: Path) -> List[Dict]:
-    """Load parsed log data from JSON or CSV file."""
+def load_data_chunked(input_path: Path, chunk_size: int = 100000):
+    """
+    Load parsed log data in chunks (memory-efficient for large files).
+    
+    Args:
+        input_path: Path to input file
+        chunk_size: Number of entries to load per chunk
+    
+    Yields:
+        Chunks of log entries
+    """
     if input_path.suffix == '.json':
+        # For JSON, we need to parse incrementally
+        # This is a simplified approach - for very large files, consider using ijson
         with open(input_path, 'r') as f:
-            return json.load(f)
+            data = json.load(f)
+            if not isinstance(data, list):
+                raise ValueError("JSON file must contain a list of entries")
+            
+            # Yield in chunks
+            for i in range(0, len(data), chunk_size):
+                yield data[i:i + chunk_size]
     elif input_path.suffix == '.csv':
-        df = pd.read_csv(input_path)
+        # For CSV, use pandas chunking
+        for chunk in pd.read_csv(input_path, chunksize=chunk_size):
+            # Convert query_params string back to dict if needed
+            if 'query_params' in chunk.columns:
+                chunk['query_params'] = chunk['query_params'].apply(
+                    lambda x: json.loads(x) if isinstance(x, str) else {}
+                )
+            yield chunk.to_dict('records')
+    else:
+        raise ValueError(f"Unsupported file format: {input_path.suffix}")
+
+
+def load_data(input_path: Path, use_chunked: bool = False) -> List[Dict]:
+    """
+    Load parsed log data from JSON or CSV file.
+    
+    Args:
+        input_path: Path to input file
+        sample_size: If specified, randomly sample this many entries
+        sample_percent: If specified, randomly sample this percentage of entries (0.0-1.0)
+    
+    Returns:
+        List of log entries
+    """
+    if use_chunked:
+        # Use chunked processing - collect all chunks
+        all_entries = []
+        for chunk in load_data_chunked(input_path):
+            all_entries.extend(chunk)
+        entries = all_entries
+    elif input_path.suffix == '.json':
+        # For large JSON files, check size and use chunked if needed
+        file_size = input_path.stat().st_size
+        file_size_mb = file_size / (1024 * 1024)
+        
+        if file_size_mb > 500:  # If file is > 500MB, use chunked loading
+            print(f"Large file detected ({file_size_mb:.1f} MB). Using chunked processing...", file=sys.stderr)
+            all_entries = []
+            for chunk in load_data_chunked(input_path):
+                all_entries.extend(chunk)
+            entries = all_entries
+        else:
+            with open(input_path, 'r') as f:
+                entries = json.load(f)
+    elif input_path.suffix == '.csv':
+        # For CSV, use pandas with chunking for large files
+        file_size = input_path.stat().st_size
+        file_size_mb = file_size / (1024 * 1024)
+        
+        if file_size_mb > 500:
+            print(f"Warning: Large file detected ({file_size_mb:.1f} MB). Loading in chunks...", file=sys.stderr)
+            # Read in chunks and combine
+            chunks = []
+            for chunk in pd.read_csv(input_path, chunksize=100000):
+                chunks.append(chunk)
+            df = pd.concat(chunks, ignore_index=True)
+        else:
+            df = pd.read_csv(input_path)
+        
         # Convert query_params string back to dict if needed
         if 'query_params' in df.columns:
             df['query_params'] = df['query_params'].apply(
                 lambda x: json.loads(x) if isinstance(x, str) else {}
             )
-        return df.to_dict('records')
+        entries = df.to_dict('records')
     else:
         raise ValueError(f"Unsupported file format: {input_path.suffix}")
+    
+    return entries
+
+
+def filter_by_time(entries: List[Dict], last_hours: float) -> List[Dict]:
+    """
+    Filter entries to only include those from the last N hours.
+    
+    Args:
+        entries: List of log entries
+        last_hours: Number of hours to look back (e.g., 1.0 for last hour)
+    
+    Returns:
+        Filtered list of entries
+    """
+    if not entries or last_hours is None:
+        return entries
+    
+    # Get current time in UTC
+    now = datetime.now(timezone.utc)
+    cutoff_time = now - timedelta(hours=last_hours)
+    
+    filtered = []
+    for entry in entries:
+        timestamp_str = entry.get('timestamp')
+        if not timestamp_str:
+            continue
+        
+        try:
+            # Parse timestamp (handle both ISO format and other formats)
+            if isinstance(timestamp_str, str):
+                # Try ISO format first
+                try:
+                    entry_time = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                except ValueError:
+                    # Try other common formats
+                    try:
+                        entry_time = datetime.strptime(timestamp_str, '%Y-%m-%dT%H:%M:%S')
+                        # Assume UTC if no timezone info
+                        entry_time = entry_time.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        continue
+            else:
+                continue
+            
+            # Filter entries within the time window
+            if entry_time >= cutoff_time:
+                filtered.append(entry)
+        except (ValueError, TypeError, AttributeError):
+            # Skip entries with invalid timestamps
+            continue
+    
+    return filtered
 
 
 def filter_by_time(entries: List[Dict], last_hours: float) -> List[Dict]:
@@ -364,7 +493,8 @@ def analyze_slowness_patterns(entries: List[Dict]) -> Dict:
                 if len(df_with_cache) > 0:
                     df_with_cache['hour'] = df_with_cache['timestamp'].dt.hour
                     cache_miss_by_hour = df_with_cache.groupby('hour').apply(
-                        lambda x: (x['cache_status'] == 'miss').sum() / len(x) * 100
+                        lambda x: (x['cache_status'] == 'miss').sum() / len(x) * 100,
+                        include_groups=False
                     ).to_dict()
                     results['cache_miss_rate_by_hour'] = {int(k): float(v) for k, v in cache_miss_by_hour.items()}
     
@@ -400,7 +530,8 @@ def analyze_slowness_patterns(entries: List[Dict]) -> Dict:
         if len(df_with_status) > 0:
             # Endpoints with high error rates (might be slow/failing)
             error_rates = df_with_status.groupby('path').apply(
-                lambda x: (x['status_code'] >= 400).sum() / len(x) * 100
+                lambda x: (x['status_code'] >= 400).sum() / len(x) * 100,
+                include_groups=False
             ).sort_values(ascending=False).head(20).to_dict()
             results['high_error_rate_endpoints'] = {k: float(v) for k, v in error_rates.items()}
             
@@ -453,6 +584,94 @@ def analyze_slowness_patterns(entries: List[Dict]) -> Dict:
             # Top IPs by request volume (might indicate bots/crawlers causing load)
             top_ips = df_with_ip['ip_address'].value_counts().head(20).to_dict()
             results['top_request_ips'] = {k: int(v) for k, v in top_ips.items()}
+            
+            # Get user agent info for top IPs
+            if 'user_agent' in df_with_ip.columns:
+                top_ips_with_ua = {}
+                for ip in list(top_ips.keys())[:10]:  # Top 10 IPs
+                    ip_df = df_with_ip[df_with_ip['ip_address'] == ip]
+                    if 'user_agent' in ip_df.columns:
+                        # Get most common user agent for this IP
+                        ua_counts = ip_df['user_agent'].dropna().value_counts()
+                        if len(ua_counts) > 0:
+                            top_ua = ua_counts.index[0]
+                            top_ua_count = int(ua_counts.iloc[0])
+                            total_for_ip = len(ip_df)
+                            ua_percentage = (top_ua_count / total_for_ip * 100) if total_for_ip > 0 else 0
+                            
+                            # If multiple user agents, show count
+                            unique_ua_count = len(ua_counts)
+                            if unique_ua_count > 1:
+                                top_ua_display = f"{top_ua} ({unique_ua_count} unique UAs)"
+                            else:
+                                top_ua_display = top_ua
+                            
+                            top_ips_with_ua[ip] = {
+                                'request_count': int(top_ips[ip]),
+                                'top_user_agent': top_ua_display,
+                                'top_ua_count': top_ua_count,
+                                'top_ua_percentage': float(ua_percentage),
+                                'unique_ua_count': int(unique_ua_count)
+                            }
+                        else:
+                            top_ips_with_ua[ip] = {
+                                'request_count': int(top_ips[ip]),
+                                'top_user_agent': 'Unknown',
+                                'top_ua_count': 0,
+                                'top_ua_percentage': 0.0,
+                                'unique_ua_count': 0
+                            }
+                    else:
+                        top_ips_with_ua[ip] = {
+                            'request_count': int(top_ips[ip]),
+                            'top_user_agent': 'N/A',
+                            'top_ua_count': 0,
+                            'top_ua_percentage': 0.0,
+                            'unique_ua_count': 0
+                        }
+                results['top_request_ips_with_ua'] = top_ips_with_ua
+            
+            # Requests per minute by IP (rate-based analysis)
+            if 'timestamp' in df_with_ip.columns:
+                df_with_ip['timestamp'] = pd.to_datetime(df_with_ip['timestamp'], errors='coerce')
+                df_with_ip = df_with_ip[df_with_ip['timestamp'].notna()]
+                if len(df_with_ip) > 0:
+                    ip_rates = {}
+                    for ip in df_with_ip['ip_address'].unique():
+                        ip_df = df_with_ip[df_with_ip['ip_address'] == ip]
+                        if len(ip_df) > 1:
+                            # Calculate time span
+                            min_time = ip_df['timestamp'].min()
+                            max_time = ip_df['timestamp'].max()
+                            time_span = (max_time - min_time).total_seconds() / 60.0  # Convert to minutes
+                            
+                            # Calculate requests per minute
+                            if time_span > 0:
+                                requests_per_min = len(ip_df) / time_span
+                            else:
+                                # If all requests are at the same time, use 1 minute as minimum
+                                requests_per_min = len(ip_df) / 1.0
+                            
+                            ip_rates[ip] = {
+                                'requests_per_minute': float(requests_per_min),
+                                'total_requests': int(len(ip_df)),
+                                'time_span_minutes': float(time_span) if time_span > 0 else 1.0
+                            }
+                        else:
+                            # Single request - assume 1 minute span
+                            ip_rates[ip] = {
+                                'requests_per_minute': float(len(ip_df)),
+                                'total_requests': int(len(ip_df)),
+                                'time_span_minutes': 1.0
+                            }
+                    
+                    # Sort by requests per minute and get top 10
+                    top_ips_by_rate = dict(sorted(
+                        ip_rates.items(),
+                        key=lambda x: x[1]['requests_per_minute'],
+                        reverse=True
+                    )[:10])
+                    results['top_ips_by_request_rate'] = top_ips_by_rate
     
     # 7. User agent patterns (certain clients might be slower)
     if 'user_agent' in df.columns and 'response_size' in df.columns:
@@ -609,6 +828,15 @@ def generate_report(analytics: Dict, output_format: str, output_path: Optional[P
                 print("\n### Top Request IPs (might indicate bots/crawlers)")
                 for ip, count in list(slow['top_request_ips'].items())[:10]:
                     print(f"  {ip}: {count:,} requests")
+            
+            # Top IPs by request rate
+            if 'top_ips_by_request_rate' in slow:
+                print("\n### Top IPs by Request Rate (requests per minute)")
+                for ip, data in list(slow['top_ips_by_request_rate'].items())[:10]:
+                    rate = data['requests_per_minute']
+                    total = data['total_requests']
+                    time_span = data['time_span_minutes']
+                    print(f"  {ip}: {rate:.2f} req/min ({total:,} total requests over {time_span:.1f} min)")
         
         print("\n" + "="*80)
         
@@ -653,9 +881,71 @@ def main():
         print(f"Error: Input file does not exist: {input_path}", file=sys.stderr)
         sys.exit(1)
     
-    print(f"Loading data from {input_path}...")
-    entries = load_data(input_path)
-    print(f"Loaded {len(entries):,} log entries")
+    # Check file size to determine processing strategy
+    file_size = input_path.stat().st_size
+    file_size_mb = file_size / (1024 * 1024)
+    use_chunked = file_size_mb > 200  # Use chunked processing for files > 200MB
+    
+    if use_chunked:
+        print(f"Large file detected ({file_size_mb:.1f} MB). Processing in chunks (memory-efficient)...")
+        
+        # Process in chunks and accumulate results
+        all_entries = []
+        chunk_count = 0
+        total_entries = 0
+        
+        try:
+            for chunk in load_data_chunked(input_path, chunk_size=50000):
+                chunk_count += 1
+                total_entries += len(chunk)
+                
+                # Apply time filter if specified
+                if args.last_hours:
+                    chunk = filter_by_time(chunk, args.last_hours)
+                
+                if chunk:
+                    all_entries.extend(chunk)
+                
+                # Progress indicator
+                if chunk_count % 10 == 0:
+                    print(f"  Processed {chunk_count} chunks ({total_entries:,} entries so far)...", end='\r', file=sys.stderr)
+            
+            print(f"\nLoaded {len(all_entries):,} log entries from {total_entries:,} total", file=sys.stderr)
+            entries = all_entries
+            
+        except MemoryError:
+            print(f"\nError: Out of memory. File is too large to process.", file=sys.stderr)
+            print(f"Consider using --last-hours to filter to recent entries only.", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"\nError loading data: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+    else:
+        print(f"Loading data from {input_path}...")
+        try:
+            entries = load_data(input_path, use_chunked=False)
+            print(f"Loaded {len(entries):,} log entries")
+        except MemoryError:
+            print(f"Error: Out of memory loading file.", file=sys.stderr)
+            print(f"Try using --last-hours to filter to recent entries only.", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error loading data: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+        
+        # Apply time filter if specified
+        if args.last_hours:
+            print(f"Filtering to last {args.last_hours} hour(s)...")
+            entries = filter_by_time(entries, args.last_hours)
+            print(f"Filtered to {len(entries):,} log entries")
+    
+    if not entries:
+        print(f"Error: No entries to analyze after filtering", file=sys.stderr)
+        sys.exit(1)
     
     # Apply time filter if specified
     if args.last_hours:
@@ -664,14 +954,24 @@ def main():
         print(f"Filtered to {len(entries):,} log entries")
     
     print("Generating analytics...")
-    analytics = {
-        'traffic': analyze_traffic_patterns(entries),
-        'errors': analyze_errors(entries),
-        'performance': analyze_performance(entries),
-        'user_agents': analyze_user_agents(entries),
-        'query_patterns': analyze_query_patterns(entries),
-        'slowness_investigation': analyze_slowness_patterns(entries)
-    }
+    try:
+        analytics = {
+            'traffic': analyze_traffic_patterns(entries),
+            'errors': analyze_errors(entries),
+            'performance': analyze_performance(entries),
+            'user_agents': analyze_user_agents(entries),
+            'query_patterns': analyze_query_patterns(entries),
+            'slowness_investigation': analyze_slowness_patterns(entries)
+        }
+    except MemoryError:
+        print(f"Error: Out of memory during analysis.", file=sys.stderr)
+        print(f"Try using --last-hours to filter to recent entries only.", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error during analysis: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
     
     output_path = Path(args.output) if args.output else None
     generate_report(analytics, args.format, output_path)

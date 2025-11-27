@@ -43,9 +43,9 @@ Examples:
   %(prog)s --config custom_config.yaml --source srv_quakesearch-fastly --date 2025-11-10
         """
     )
-    parser.add_argument("--start-date", type=str, help="Start date in YYYY-MM-DD format")
-    parser.add_argument("--end-date", type=str, help="End date in YYYY-MM-DD format")
-    parser.add_argument("--date", type=str, help="Start date in YYYY-MM-DD format (syncs from this date to today)")
+    parser.add_argument("--start-date", type=str, help="Start date in YYYY-MM-DD or YYYY-MM-DDTHH format (e.g., 2025-11-25 or 2025-11-25T00)")
+    parser.add_argument("--end-date", type=str, help="End date in YYYY-MM-DD or YYYY-MM-DDTHH format (e.g., 2025-11-25 or 2025-11-25T23)")
+    parser.add_argument("--date", type=str, help="Start date in YYYY-MM-DD or YYYY-MM-DDTHH format (syncs from this date to today)")
     parser.add_argument("--source", type=str, help="Specific log source to sync (from config)")
     parser.add_argument("--all-sources", action="store_true", help="Sync all enabled sources")
     parser.add_argument("--list-sources", action="store_true", help="List all available log sources")
