@@ -302,42 +302,92 @@ def main():
         print(f"No log files found in {input_dir}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Found {len(log_files)} log file(s)")
-    print("Parsing logs (lazy/streaming mode - memory efficient)...")
-
-    # Generator function that yields all entries from all files
-    total_count = 0
-    def all_entries_generator():
-        nonlocal total_count
-        for log_file in sorted(log_files):
-            print(f"  Processing: {log_file.name}")
-            file_count = 0
-            for entry in process_log_file(log_file):
-                file_count += 1
-                total_count += 1
-                yield entry
-            print(f"    Parsed {file_count} entries")
-
     # Determine output path
     if args.output:
         output_path = Path(args.output)
     else:
         output_path = Path(args.input_dir) / f"parsed_logs.{args.format}"
 
-    # Check if output file exists and warn
+    # Check for incremental parsing - only process files newer than output
+    existing_entries = []
+    files_to_process = []
+    output_mtime = output_path.stat().st_mtime if output_path.exists() else 0
+    
     if output_path.exists():
-        print(f"Warning: Output file already exists: {output_path}")
-        print(f"  It will be OVERWRITTEN with new data.")
-        print(f"  (Previous data will be lost)")
-
-    # Save output using streaming (overwrites existing file)
-    print(f"Saving to {output_path}...")
-    if args.format == 'json':
-        save_json_streaming(all_entries_generator(), output_path)
+        print(f"Found existing parsed file: {output_path}")
+        print(f"Checking which files need to be (re)parsed...")
+        
+        # Load existing entries if we're doing incremental parsing
+        try:
+            if args.format == 'json':
+                with open(output_path, 'r') as f:
+                    existing_entries = json.load(f)
+                print(f"  Loaded {len(existing_entries):,} existing entries")
+            # For CSV, we'd need to load it differently, but JSON is the default
+        except Exception as e:
+            print(f"  Warning: Could not load existing file: {e}")
+            print(f"  Will reparse all files")
+            existing_entries = []
+        
+        # Check which files need processing
+        for log_file in sorted(log_files):
+            file_mtime = log_file.stat().st_mtime
+            if file_mtime > output_mtime:
+                files_to_process.append(log_file)
+            else:
+                print(f"  Skipping {log_file.name} (already parsed)")
     else:
-        save_csv_streaming(all_entries_generator(), output_path)
+        # No existing file, process all
+        files_to_process = log_files
+        print(f"Found {len(log_files)} log file(s) to parse")
 
-    print(f"\nTotal entries parsed: {total_count}")
+    if not files_to_process:
+        print(f"All files already parsed. No new files to process.")
+        print(f"Total entries: {len(existing_entries):,}")
+        return
+
+    print(f"Parsing {len(files_to_process)} new/changed file(s)...")
+    print("Parsing logs (lazy/streaming mode - memory efficient)...")
+
+    # Generator function that yields entries from new files
+    new_count = 0
+    def new_entries_generator():
+        nonlocal new_count
+        for log_file in sorted(files_to_process):
+            print(f"  Processing: {log_file.name}")
+            file_count = 0
+            for entry in process_log_file(log_file):
+                file_count += 1
+                new_count += 1
+                yield entry
+            print(f"    Parsed {file_count} entries")
+
+    # Collect new entries
+    new_entries = list(new_entries_generator())
+    
+    # Merge with existing entries
+    if existing_entries:
+        print(f"Merging {len(new_entries):,} new entries with {len(existing_entries):,} existing entries...")
+        all_entries = existing_entries + new_entries
+    else:
+        all_entries = new_entries
+
+    # Ensure output directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Save merged output
+    print(f"Saving {len(all_entries):,} total entries to {output_path}...")
+    if args.format == 'json':
+        with open(output_path, 'w') as f:
+            json.dump(all_entries, f, indent=2)
+    else:
+        save_csv_streaming(all_entries, output_path)
+
+    print(f"\nTotal entries parsed: {len(all_entries):,}")
+    if new_entries:
+        print(f"  New entries: {len(new_entries):,}")
+    if existing_entries:
+        print(f"  Existing entries: {len(existing_entries):,}")
 
     print("Done!")
 
